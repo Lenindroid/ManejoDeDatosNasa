@@ -1,13 +1,16 @@
 """Curates the DONKI events that reach a lunar base and turns them into game-ready entries.
 Usage: python -I scripts/build_game_events.py donki_data eventos_juego.json
 
-Each event has: robot dialog (2 strings), radiation points, blackout flag, arrival time (minutes)
-and the chain it belongs to (events linked by DONKI, e.g. flare -> particle storm -> CME impact)."""
+Each event has: robot dialog (real alert + what to do), radiation points, blackout flag, arrival time (minutes)
+and the chain it belongs to (events linked by DONKI, e.g. flare -> particle storm -> CME impact).
+The dialogs are for kids 6 to 12: short, no jargon, the real date, and an analogy for each new idea."""
 import json, os, sys, math, datetime as dt, collections as C
 
 SRC, OUT = sys.argv[1], sys.argv[2]
+PERIOD = sys.argv[3] if len(sys.argv) > 3 else "2024-01-01 to 2024-12-31"  # only used in the "source" text
 L = lambda t: json.load(open(os.path.join(SRC, t + ".json")))
 AU_KM = 149_597_870
+EARTH_KM = 12_742  # diameter of the Earth, for speed comparisons
 SUN_LIGHT_MIN = 8  # sunlight reaches the Earth-Moon system in ~8.3 minutes
 
 def ts(s): return dt.datetime.strptime(s, "%Y-%m-%dT%H:%MZ")
@@ -16,13 +19,13 @@ def nice_date(s): d = ts(s); return f"{d:%B} {d.day}, {d.year}"
 def links(x): return [l["activityID"] for l in (x.get("linkedEvents") or [])]
 
 # ---------------------------------------------------------------- who detected it
-DETECTORS = {  # DONKI instrument prefix -> friendly spacecraft name
-    "GOES-P": "NOAA's GOES weather satellite", "GOES-S": "NOAA's backup GOES weather satellite",
-    "GOES": "NOAA's GOES-19 satellite (CCOR-1 coronagraph)",
-    "SOHO": "the NASA/ESA SOHO observatory", "STEREO A": "NASA's STEREO-A spacecraft",
+DETECTORS = {  # DONKI instrument prefix -> spacecraft name a kid can read
+    "GOES-P": "NOAA's GOES weather satellite", "GOES-S": "NOAA's GOES weather satellite",
+    "GOES": "NOAA's GOES weather satellite",
+    "SOHO": "the SOHO space telescope", "STEREO A": "NASA's STEREO-A spacecraft",
     "ACE": "NASA's ACE spacecraft", "DSCOVR": "NOAA's DSCOVR satellite",
-    "SOLAR-1": "NOAA's SOLAR-1 space weather observatory", "IMAP": "NASA's IMAP spacecraft",
-    "MODEL": "NASA's REleASE early-warning system",
+    "SOLAR-1": "NOAA's SOLAR-1 satellite", "IMAP": "NASA's IMAP spacecraft",
+    "MODEL": "NASA's early-warning computer",
 }
 NEAR_EARTH = ("GOES", "SOHO", "ACE", "DSCOVR", "SOLAR-1", "IMAP", "MODEL")  # STEREO-A is far from the Moon
 
@@ -33,47 +36,54 @@ def spacecraft(inst):
         if n and n not in names: names.append(n)
     return names
 
-def who(inst):
-    n = spacecraft(inst)[:2] or ["NASA's space weather team"]
-    return " and ".join(n)
+def spotter(inst):
+    n = spacecraft(inst)
+    return n[0] if n else "NASA's space weather team"
 
-def detected(names, what, date, verb="has"):
-    verb = "have" if " and " in names else verb
-    s = f"{names} {verb} detected {what}"
-    return s[0].upper() + s[1:] + f" (based on a real event recorded in NASA's DONKI database on {nice_date(date)})."
-
-# ---------------------------------------------------------------- explanations (one per event type)
+# ---------------------------------------------------------------- explanations (said once per event type)
 EXPLAIN = {
- "FLR": ("A solar flare is a sudden, extremely bright flash on the Sun. It happens when twisted magnetic fields "
-         "above a sunspot snap and reconnect, releasing in minutes more energy than humanity uses in thousands of years. "
-         "The flash is made of X-rays and ultraviolet light, which travel at the speed of light and reach the Moon in about "
-         "8 minutes. On Earth the atmosphere blocks these rays, but the Moon has no air, so they hit the surface directly. "
-         "Flares are ranked C, M and X, and each letter is 10 times stronger than the one before. Big flares are often "
-         "the first warning of something worse: a storm of fast particles or a coronal mass ejection."),
- "SEP": ("A solar energetic particle event is a storm of tiny pieces of atoms, mostly protons, that a solar flare or the "
-         "shock wave of a coronal mass ejection speeds up to almost the speed of light. They can reach the Moon in minutes "
-         "to a few hours. Earth's magnetic field and atmosphere shield people on the ground, but the Moon has neither, so "
-         "these particles go through spacesuits, thin walls and the human body, damaging cells and DNA. They also wear out "
-         "solar panels and can make electronics glitch. It is the most dangerous kind of space weather for astronauts: the "
-         "best protection is to stay behind thick shielding, like rock, water or heavy equipment, until it passes."),
- "CME": ("A coronal mass ejection is a gigantic cloud of electrically charged gas (plasma) and magnetic field that the Sun "
-         "throws into space. It can weigh billions of tons and travel at hundreds to thousands of kilometers per second, "
-         "so it takes about one to four days to cover the 150 million kilometers to the Earth-Moon system. Earth's magnetic "
-         "field deflects most of it, but the Moon has no magnetic field: the plasma hits the surface directly and charges "
-         "the ground, the base and its equipment with static electricity. Sudden electric discharges can damage circuits "
-         "and knock out power systems, and the shock wave in front of the cloud can bring extra radiation."),
- "IPS": ("An interplanetary shock is a sudden wall in the solar wind, the stream of gas that always flows out of the Sun. "
-         "At the shock, the speed, density and magnetic field of that gas jump all at once, a bit like the sonic boom of a "
-         "supersonic jet. Most shocks are pushed ahead of a fast coronal mass ejection; others form where fast solar wind "
-         "crashes into slower wind. When a shock sweeps over the Moon it speeds up nearby particles, adding some radiation, "
-         "and suddenly changes the electric charge of the lunar surface and of everything standing on it."),
- "HSS": ("A high speed stream is a river of solar wind blowing about twice as fast as usual. It pours out of a coronal hole, "
-         "a dark region of the Sun where the magnetic field opens into space and lets gas escape freely. Because the Sun "
-         "rotates once every 27 days, these streams sweep past the Moon like the jet of a rotating garden sprinkler, and the "
-         "same stream often returns a month later. They are much less violent than other events, but they raise the "
-         "electric charge of the lunar surface, which makes the fine, sharp moon dust lift and cling to solar panels "
-         "and equipment."),
+ "FLR": ("A solar flare is like a giant camera flash on the Sun. Its light reaches the Moon in just 8 minutes! "
+         "Scientists grade flares C, M and X, and X is the biggest."),
+ "CME": ("Scientists call this a coronal mass ejection, or CME. It is like the Sun sneezing out a cloud of hot gas "
+         "much bigger than the Earth. It takes one to four days to reach the Moon."),
+ "SEP": ("These particles are tiny bits of atoms, faster than anything people have ever built. On Earth, the air and "
+         "a magnetic shield protect us like an umbrella. The Moon has neither, so our walls are the umbrella!"),
+ "IPS": ("A shock wave is like the wave in front of a fast boat: it arrives first and shakes everything it passes."),
+ "HSS": ("Some parts of the Sun blow a faster wind, like a fan that is always on. It gives moon dust static, "
+         "so it sticks to everything, like a balloon rubbed on your hair!"),
 }
+
+# ---------------------------------------------------------------- robot dialog: [real alert, what to do]
+OPENERS = ["This really happened!", "Real NASA data!", "True story from space!"]
+
+def kid_dialog(e):
+    d, t, date, seen = e["data"], e["type"], nice_date(e["date"]), e["_seen_by"]
+    if t == "FLR":
+        x = d["class"][0] == "X"
+        alert = f"On {date}, {seen} saw a solar flare of class {d['class']}." + (" That is the biggest kind!" if x else "")
+        tip = ("Radiation may come next. Get the base ready and stay close to it!" if x
+               else "Its flash can harm the solar panels. Check them!")
+    elif t == "CME":
+        speed = round(d["speed_kms"])
+        alert = f"On {date}, {seen} saw the Sun throw a giant cloud of hot gas our way, at {speed} km per second."
+        if speed: alert += f" That is fast enough to cross the whole Earth in {round(EARTH_KM / speed)} seconds!"
+        tip = ("When it hits, the power will go out. Get the spare batteries ready!" if e["blackout"]
+               else "It will only brush past us. Check the solar panels after it passes." if d["glancing_blow"]
+               else "It is not very fast. Check the solar panels when it arrives.")
+    elif t == "SEP":
+        strength = "super strong " if e["blackout"] else "strong " if d["max_energy_mev"] >= 28 else ""
+        alert = f"On {date}, {seen} detected a {strength}storm of tiny particles shooting out of the Sun."
+        tip = ("It is so strong it can break machines! Stay inside, keep away from radiation zones and check the oxygen machine."
+               if e["blackout"] else "Stay inside the base and keep away from radiation zones until it passes!")
+    elif t == "IPS":
+        alert = f"On {date}, {seen} felt a shock wave in the wind that blows from the Sun."
+        tip = "It brings a little radiation. Check the solar panels after it passes!"
+    else:  # HSS
+        alert = f"On {date}, {seen} measured a fast wind blowing from the Sun."
+        tip = "It makes moon dust stick to the solar panels. Time to clean them!"
+    opener = OPENERS[sum(map(ord, e["id"])) % len(OPENERS)]  # same opener every time the file is rebuilt
+    return [f"{opener} {alert}", tip]
+
 NAMES = {"FLR": "Solar Flare", "SEP": "Solar Energetic Particle Event", "CME": "Coronal Mass Ejection",
          "IPS": "Interplanetary Shock", "HSS": "High Speed Solar Wind Stream"}
 
@@ -97,9 +107,9 @@ def sep_energy(inst):
 def sep_points(mev): return 60 if mev >= 100 else 40 if mev >= 28 else 25
 
 events = {}
-def add(tipo, eid, date, rad, blackout, arrival, source, first_line, data, link, linked):
+def add(tipo, eid, date, rad, blackout, arrival, source, seen_by, data, link, linked):
     events[eid] = {"id": eid, "type": tipo, "name": NAMES[tipo], "date": date,
-                   "dialog": [first_line, EXPLAIN[tipo]],
+                   "dialog": None, "_seen_by": seen_by,  # written at the end, once the event is final
                    "radiation_points": rad, "blackout": blackout,
                    "arrival_minutes": arrival, "arrival_source": source,
                    "data": data, "link": link, "_links": linked}
@@ -109,9 +119,8 @@ for x in L("FLR"):
     cls = x.get("classType") or "C"
     if cls[0] not in "MX": continue
     rise = max(SUN_LIGHT_MIN, minutes(x["beginTime"], x["peakTime"]))
-    region = f" from sunspot region {x['activeRegionNum']}" if x.get("activeRegionNum") else ""
     add("FLR", x["flrID"], x["beginTime"], flare_points(cls), False, rise, "observed: minutes from flare start to peak",
-        detected(who([i["displayName"] for i in x["instruments"]]), f"a class {cls} solar flare{region}", x["beginTime"]),
+        spotter([i["displayName"] for i in x["instruments"]]),
         {"class": cls, "peak_time": x["peakTime"], "source_location": x.get("sourceLocation")}, x["link"], links(x))
 
 # ---------------------------------------------------------------- IPS at Earth: real arrival time of CME shocks
@@ -134,10 +143,8 @@ for x in L("CME"):
         arrival, source = minutes(x["startTime"], model_arrival), "forecast: NASA WSA-ENLIL model"
     else:
         arrival, source = round(AU_KM / speed / 60), "estimate: 1 AU / measured speed"
-    hit = "will hit the Earth-Moon system" if not glancing else "will graze the Earth-Moon system"
     add("CME", x["activityID"], x["startTime"], 0 if glancing else 5, not glancing and speed >= 700, arrival, source,
-        detected(who([i["displayName"] for i in x["instruments"]]),
-                 f"a coronal mass ejection traveling at {round(speed)} km/s that {hit}", x["startTime"]),
+        spotter([i["displayName"] for i in x["instruments"]]),
         {"speed_kms": speed, "half_angle_deg": an.get("halfAngle"), "glancing_blow": glancing,
          "shock_arrival": shock[0] if shock else model_arrival},
         x["link"], links(x))
@@ -155,14 +162,14 @@ for x in L("SEP"):
     else:
         arrival, source = None, None  # filled later with the typical delay
     add("SEP", x["sepID"], x["eventTime"], sep_points(mev), mev >= 100, arrival, source,
-        detected(who(inst), f"a storm of solar protons with energies above {mev:g} MeV", x["eventTime"]),
+        spotter(inst),
         {"max_energy_mev": mev, "instruments": inst}, x["link"], links(x))
 
 # ---------------------------------------------------------------- IPS not caused by a known CME
 for i, x in ips.items():
     if x.get("_merged"): continue
     add("IPS", i, x["eventTime"], 5, False, None, None,
-        detected(who([d["displayName"] for d in x["instruments"]]), "a shock wave in the solar wind arriving at Earth and the Moon", x["eventTime"]),
+        spotter([d["displayName"] for d in x["instruments"]]),
         {"location": x["location"]}, x["link"], links(x))
 
 # ---------------------------------------------------------------- HSS seen near Earth
@@ -170,7 +177,7 @@ for x in L("HSS"):
     inst = [i["displayName"] for i in x["instruments"]]
     if not any(i.startswith(NEAR_EARTH) for i in inst): continue
     add("HSS", x["hssID"], x["eventTime"], 0, False, round(AU_KM / 650 / 60), "estimate: 1 AU at a typical 650 km/s",
-        detected(who(inst), "a high speed stream of solar wind", x["eventTime"]),
+        spotter(inst),
         {}, x["link"], links(x))
 
 # ---------------------------------------------------------------- merge duplicate SEPs
@@ -186,7 +193,7 @@ for group in groups:
     mev = keep["data"]["max_energy_mev"]
     keep.update(date=group[0]["date"], radiation_points=sep_points(mev), blackout=mev >= 100)
     keep["data"]["instruments"] = inst
-    keep["dialog"][0] = detected(who(inst), f"a storm of solar protons with energies above {mev:g} MeV", group[0]["date"])
+    keep["_seen_by"] = spotter(inst)
     known = [e for e in group if e["arrival_source"]]
     if known:
         first = min(known, key=lambda e: e["arrival_minutes"])
@@ -226,13 +233,15 @@ for eid in sorted(events, key=lambda i: events[i]["date"]):
     for step, i in enumerate(comp, 1): events[i]["chain"] = {"id": cid, "step": step, "length": len(comp)}
 for e in events.values():
     e.setdefault("chain", None); del e["_links"]
+    e["dialog"] = kid_dialog(e); del e["_seen_by"]
 
 ordered = sorted(events.values(), key=lambda e: e["date"])
 out = {
- "source": "NASA CCMC DONKI - https://ccmc.gsfc.nasa.gov/DONKI/ (real events, 2025-11-14 to 2026-11-14)",
+ "source": f"NASA CCMC DONKI - https://ccmc.gsfc.nasa.gov/DONKI/ (real events, {PERIOD})",
  "setting": "Lunar base: only events that reach the Earth-Moon system are included.",
  "fields": {
-   "dialog": "[0] who detected what (real DONKI event + date), [1] explanation of the event type",
+   "dialog": "[0] real alert: date, who saw it and a comparison; [1] what to do in the base",
+   "explanations": "One short analogy per event type. Say it the first time that type appears, between dialog[0] and dialog[1]",
    "radiation_points": "Extra radiation added to the environment, 0-100 game scale (see radiation_scale)",
    "blackout": "True if the event can knock out the base's power",
    "arrival_minutes": "Minutes from the robot's warning until the event hits the base",
@@ -261,6 +270,7 @@ out = {
    "chains": len(chains),
    "standalone": sum(e["chain"] is None for e in ordered),
  },
+ "explanations": EXPLAIN,
  "chains": chains,
  "events": ordered,
 }
