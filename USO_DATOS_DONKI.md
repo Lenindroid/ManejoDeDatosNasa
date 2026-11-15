@@ -1,148 +1,203 @@
 # Uso de los datos de DONKI en el juego de la base lunar
 
-Este documento explica qué datos de DONKI usamos, cómo los filtramos y cómo los traducimos en eventos que afectan los **dos stats del juego: Energía y Salud**.
+Este documento explica cómo leer `eventos_juego.json` y cómo ir sacando eventos para que el robot de la base lunar los anuncie.
+
+El JSON solo contiene eventos que **llegan a la Luna**. Como la Luna no tiene campo magnético ni atmósfera, la radiación y el plasma del Sol golpean la base directamente. Todo el contenido del JSON está en inglés.
 
 ## 1. Archivos
 
 | Archivo | Qué contiene |
 |---|---|
-| `donki_data/*.json` | Datos crudos de DONKI, sin modificar (14-nov-2025 a 14-nov-2026), un archivo por tipo de evento |
-| `eventos_juego.json` | **Los eventos útiles para el juego**, filtrados, con severidad y efecto sobre cada stat |
-| `scripts/fetch_donki.py` | Descarga los datos crudos (en tramos de 60 días, el máximo que permite la API) |
-| `scripts/build_game_events.py` | Genera `eventos_juego.json`. Aquí se ajustan los filtros, la severidad y los efectos. |
-| `IDEAS_STATS_DONKI.md` | Lluvia de ideas de stats que se usó para elegir Energía y Salud |
+| `eventos_juego.json` | **Lo que lee el juego**: 518 eventos reales, ya curados, con el diálogo del robot, la radiación, el apagón y el tiempo de llegada |
+| `donki_data/*.json` | Datos crudos de DONKI (NASA), del 14-nov-2025 al 14-nov-2026. Un archivo por tipo de evento |
+| `scripts/fetch_donki.py` | Descarga los datos crudos |
+| `scripts/build_game_events.py` | Genera `eventos_juego.json`. Aquí se ajustan los filtros, los textos y las reglas |
 
-Para regenerar todo (por ejemplo, con otro periodo):
+Para regenerar todo:
 
 ```bash
 python -I scripts/fetch_donki.py donki_data
 python -I scripts/build_game_events.py donki_data eventos_juego.json
 ```
 
-Fuente: `https://ccmc.gsfc.nasa.gov/DONKI/WS/get/{TIPO}?startDate=AAAA-MM-DD&endDate=AAAA-MM-DD`
+Fuente: NASA CCMC DONKI, `https://ccmc.gsfc.nasa.gov/DONKI/WS/get/{TIPO}`
 
-## 2. Stats del juego
+## 2. Tipos de evento
 
-| Stat | Clave en el JSON | Qué representa | Qué lo afecta en DONKI |
+| `type` | Nombre | Eventos | Qué le hace a la base lunar |
 |---|---|---|---|
-| ⚡ **Energía** | `energia` | Producción eléctrica de la base (paneles solares y sistemas) | Llamaradas (FLR), eyecciones de masa coronal (CME), choques (IPS), viento solar rápido (HSS) y tormentas de partículas extremas (SEP) |
-| ❤️ **Salud** | `salud` | Salud de la tripulación frente a la radiación | Tormentas de partículas (SEP) y llamaradas de clase X |
+| `FLR` | Solar Flare (llamarada) | 301 | Destello de rayos X. Llega en ~8 minutos. Radiación baja (5 a 15 puntos). Suele ser el **primer aviso** de algo peor |
+| `CME` | Coronal Mass Ejection | 147 | Nube de plasma que tarda 1 a 5 días en llegar. Si pega de frente a ≥ 700 km/s, **provoca un apagón** (52 casos) |
+| `SEP` | Solar Energetic Particle Event | 6 | Tormenta de protones: **la más peligrosa para la salud** (25 a 60 puntos). Las de > 100 MeV también causan apagón (2 casos) |
+| `IPS` | Interplanetary Shock | 16 | Onda de choque en el viento solar. Radiación leve (5) |
+| `HSS` | High Speed Solar Wind Stream | 48 | Viento solar rápido. Sin radiación. Carga el polvo lunar, que se pega a los paneles |
 
-Los dos stats están ligados a lo que DONKI realmente mide. Como la Luna **no tiene campo magnético ni atmósfera**, la radiación y el plasma solar golpean la base directamente.
+Solo se incluyen las llamaradas M y X, las CME que apuntan a la Tierra y la Luna, y lo que midieron los satélites cercanos a la Tierra. Los fenómenos que solo ocurren dentro del campo magnético de la Tierra (tormentas geomagnéticas y cinturones de radiación) no afectan a la Luna, así que no están.
 
-## 3. Qué eventos conservamos y por qué
-
-| Tipo | Nombre | Filtro aplicado | Eventos | Stat que afecta |
-|---|---|---|---|---|
-| FLR | Llamarada solar | Solo clases **M y X** (se descartan C y B) | 301 | Energía; las de clase X también afectan la Salud |
-| CME | Eyección de masa coronal | Solo las que **llegan a la Tierra-Luna** según el modelo WSA-ENLIL, o las de velocidad ≥ 1000 km/s | 198 | Energía |
-| SEP | Partículas energéticas solares | Todas | 42 (13 días distintos) | Salud; las extremas (severidad 5) también afectan la Energía |
-| IPS | Choque interplanetario | Solo los medidos en `location = "Earth"` | 67 | Energía |
-| HSS | Corriente rápida de viento solar | Todas | 75 | Energía (efecto leve) |
-
-**Excluidos:** GST (tormentas geomagnéticas), RBE (aumentos en los cinturones de radiación) y MPC (cruces de la magnetopausa). Son fenómenos del campo magnético de la **Tierra** y solo encajaban con un stat de comunicaciones, que ya no usamos.
-
-**Total: 683 eventos en un año.**
-- **Energía:** 657 eventos. Hay de sobra, todos los meses (entre 13 y 113).
-- **Salud:** 58 eventos (42 SEP y 16 llamaradas X), repartidos en **24 días distintos**. Son pocos pero muy peligrosos. En octubre y noviembre de 2026 no hay ninguno.
-
-## 4. Estructura de cada evento en `eventos_juego.json`
+## 3. Estructura de `eventos_juego.json`
 
 ```json
 {
- "id": "2026-02-01T23:44:00-FLR-001",
- "tipo": "FLR",
- "fecha": "2026-02-01T23:57Z",
- "severidad": 5,
- "recursos_afectados": ["energia", "salud"],
- "efectos": { "energia": -50, "salud": -30 },
- "datos": { "clase": "X8.1", "inicio": "2026-02-01T23:44Z", "fin": "2026-02-02T00:04Z", "region": "N13E35" },
- "eventos_vinculados": ["2026-02-02T00:48:00-CME-001"],
- "link": "https://ccmc.gsfc.nasa.gov/DONKI/view/FLR/44361/-1"
+ "fields": { ... },           // descripción de cada campo (en inglés)
+ "radiation_scale": { ... },  // cómo se calcularon los puntos de radiación
+ "blackout_rules": { ... },   // qué eventos causan apagón y por qué
+ "summary": { ... },          // conteos
+ "chains": {                  // cadenas: lista de ids en orden
+   "chain-001": ["2025-11-14T07:44:00-FLR-001", "2025-11-14T08:00:00-CME-001", "2025-11-14T09:20:00-SEP-001"],
+   ...
+ },
+ "events": [ ... ]            // los 518 eventos, ordenados por fecha
 }
 ```
 
-- `fecha`: hora UTC del evento. Para las FLR es la hora del pico.
-- `efectos`: cuánto cambia cada stat (ver sección 5).
-- `datos`: los valores originales de DONKI que usamos para calcular la severidad.
-- `eventos_vinculados`: relaciones causa-efecto registradas por los científicos de DONKI (ver sección 6).
-- `link`: ficha oficial del evento, para verificarlo.
+### Cada evento
 
-El archivo también incluye `resumen`, con conteos por tipo, stat, severidad y mes, y `efecto_por_severidad`, con la tabla de efectos.
-
-## 5. Severidad (1 a 5) y efectos
-
-### Cómo se calcula la severidad
-
-| Tipo | Dato de DONKI | 1 menor | 2 moderado | 3 fuerte | 4 severo | 5 extremo |
-|---|---|---|---|---|---|---|
-| FLR | `classType` | – | M1–M4.9 | M5–M9.9 | X1–X4.9 | ≥ X5 |
-| CME | `speed` (km/s) + si llega a la Tierra-Luna | <500 | 500–699 | 700–999 | ≥1000 | ≥1500 (las que llegan suben +1 nivel) |
-| SEP | instrumentos que la detectan | – | – | – | detectada | >10 MeV en GOES o 100 MeV |
-| IPS | – | – | siempre 2 | – | – | – |
-| HSS | – | siempre 1 | – | – | – | – |
-
-### Efecto sobre los stats
-
-Son valores iniciales para balancear jugando.
-
-| Severidad | ⚡ Energía (% de producción perdida mientras dura el evento) | ❤️ Salud (puntos perdidos si la tripulación está expuesta) |
-|---|---|---|
-| 1 | −5 % | −1 |
-| 2 | −10 % | −3 |
-| 3 | −20 % | −8 |
-| 4 | −35 % | −15 |
-| 5 | −50 % | −30 |
-
-Cada evento aplica estos efectos **solo a los stats de `recursos_afectados`**:
-
-| Evento | Severidad | Energía | Salud |
-|---|---|---|---|
-| FLR clase M | 2–3 | ✅ | – |
-| FLR clase X | 4–5 | ✅ | ✅ |
-| CME, IPS, HSS | 1–5 | ✅ | – |
-| SEP | 4 | – | ✅ |
-| SEP extrema | 5 | ✅ (degrada paneles) | ✅ |
-
-## 6. Cadenas de eventos y decisiones
-
-En el Sol, los eventos ocurren en secuencia. El campo `eventos_vinculados` registra esa secuencia, y eso le da al jugador **tiempo para reaccionar**:
-
-```
-FLR (llamarada)  →  SEP (partículas, minutos u horas después)          → ❤️ Salud
-      ↓
-CME (eyección)   →  IPS (el choque llega 1 a 3 días después, ver "llegada_estimada")  → ⚡ Energía
+```json
+{
+ "id": "2026-07-30T18:25:00-SEP-001",
+ "type": "SEP",
+ "name": "Solar Energetic Particle Event",
+ "date": "2026-07-30T18:20Z",
+ "dialog": [
+  "NOAA's GOES weather satellite and the NASA/ESA SOHO observatory have detected a storm of solar protons with energies above 100 MeV (based on a real event recorded in NASA's DONKI database on July 30, 2026).",
+  "A solar energetic particle event is a storm of tiny pieces of atoms, mostly protons, ..."
+ ],
+ "radiation_points": 60,
+ "blackout": true,
+ "arrival_minutes": 147,
+ "arrival_source": "observed: minutes after its flare/CME began",
+ "data": { "max_energy_mev": 100.0, "instruments": ["GOES-P: SEISS >100 MeV", "..."] },
+ "link": "https://ccmc.gsfc.nasa.gov/DONKI/view/SEP/47873/-1",
+ "chain": { "id": "chain-050", "step": 3, "length": 3 }
+}
 ```
 
-Ejemplo real del 14-nov-2025: llamarada FLR → CME a 1082 km/s → 6 registros SEP ese mismo día → choques IPS el 15 y 16 de noviembre.
+| Campo | Para qué sirve en el juego |
+|---|---|
+| `dialog` | El arreglo de la caja de diálogo del robot. `[0]` dice quién detectó qué, basado en el evento real y su fecha. `[1]` explica el tipo de evento. Es el mismo texto para todos los eventos del mismo tipo |
+| `radiation_points` | Radiación que el evento añade al ambiente, en una escala de juego de 0 a 100. Es 0 si el evento no genera radiación |
+| `blackout` | `true` si el evento puede dejar sin energía a la base |
+| `arrival_minutes` | Minutos desde el aviso del robot hasta que el evento llega a la base. Es el tiempo que tiene el jugador para prepararse |
+| `chain` | `null` si el evento va solo. Si no, indica a qué cadena pertenece y en qué paso va |
+| `name` | Nombre del tipo de evento en inglés, útil para títulos o la interfaz |
+| `date`, `link`, `data`, `arrival_source` | Referencia: fecha real (UTC), ficha oficial de la NASA, valores originales y de dónde salió el tiempo de llegada. El juego no los necesita |
 
-### La decisión central: Energía contra Salud
+### Escalas usadas
 
-Los dos stats compiten entre sí. Eso genera el dilema principal del juego:
+- **Radiación.** DONKI no mide dosis, así que los puntos salen de lo que sí mide:
+  - FLR: según la clase. M1 = 5, X1 = 10, X10 = 15.
+  - SEP: según la energía de los protones. > 10 MeV = 25, ~30 MeV = 40, > 100 MeV = 60.
+  - CME de impacto directo: 5. Rozón: 0.
+  - IPS: 5. HSS: 0.
+- **Apagón.** CME de impacto directo a ≥ 700 km/s (el plasma carga eléctricamente la base y las descargas tumban el sistema eléctrico) y SEP de > 100 MeV (fallas en la electrónica).
+- **Tiempo de llegada.** Según el caso, es el tiempo real medido, el pronóstico del modelo de la NASA o un estimado. `arrival_source` dice cuál.
+  - FLR: de 8 minutos a 1 hora (hasta su pico).
+  - SEP: de 40 minutos a 5 horas.
+  - CME: de 1 a 5 días.
+  - IPS y HSS: unos 2 a 3 días.
 
-| Acción del jugador | ⚡ Energía | ❤️ Salud |
+## 4. Cadenas de eventos
+
+En el Sol, un evento suele desencadenar otros. DONKI registra esas relaciones y el JSON las agrupa en `chains`. Hay **58 cadenas** y 396 eventos sueltos:
+
+| Cadena | Cuántas | Qué significa |
 |---|---|---|
-| **Mandar a la tripulación al refugio** | Se detiene el mantenimiento y la producción baja | Se evita (o se reduce mucho) el daño por radiación |
-| **Seguir trabajando** | La producción se mantiene y se pueden hacer reparaciones | Se recibe el daño completo de la SEP o la llamarada |
-| **Apagar sistemas como protección** antes del impacto de una CME | Se pierde producción ahora, pero el daño es menor | – |
+| FLR → CME | 39 | La llamarada avisa, y días después llega la nube de plasma |
+| IPS ↔ HSS | 13 | Choque y viento rápido que llegan juntos |
+| FLR → CME → SEP | 3 | El "triple golpe": destello, tormenta de radiación y, días después, la CME |
+| Otras (FLR → SEP, FLR + FLR → CME, FLR → CME → SEP → FLR) | 3 | Variantes de las anteriores |
 
-Propuesta de flujo de juego:
+Ejemplo real del 14-nov-2025 (`chain-001`):
 
-1. **Alerta**: llega una llamarada de clase X. Se avisa al jugador: "Llamarada X detectada, posible tormenta de partículas".
-2. **Decisión inmediata**: ¿refugio o seguir trabajando?
-3. **Pronóstico**: aparece la CME con `llegada_estimada`. El jugador tiene "N turnos" para prepararse: guardar energía o apagar sistemas.
-4. **Impacto**: cuando llega la IPS o la CME, se aplican los efectos a la Energía.
+1. **FLR** X4.0: 13 puntos de radiación, llega a su pico en 46 minutos.
+2. **CME** a 1082 km/s: impacto directo, **apagón**, llega en 2492 minutos (~1.7 días).
+3. **SEP** de > 15.8 MeV: 25 puntos de radiación, llega en 96 minutos.
 
-## 7. Escala de tiempo y balance
+Los pasos están ordenados por **cuándo se detectan**, no por cuándo llegan. En el ejemplo, la CME se anuncia antes que la SEP, pero llega mucho después. El jugador tiene que decidir qué atender primero.
 
-- **Comprimir el tiempo**: 1 día real equivale a 1 turno. Los eventos de severidad 1 y 2 del mismo día se agrupan en uno solo.
-- **Elegir un periodo**: por ejemplo, febrero de 2026 (113 eventos, 6 llamaradas X) para un nivel difícil, y octubre de 2026 (35 eventos y ninguno de Salud) para un nivel tranquilo o tutorial.
-- **Agrupar las SEP**: hay 42 registros SEP pero solo 13 días distintos, porque varios instrumentos registran la misma tormenta. Conviene agruparlas por día o por `eventos_vinculados`; si no, la salud bajaría varias veces por la misma tormenta.
-- **Recuperación de la salud**: como los eventos de Salud son escasos (24 días al año), conviene que la salud no se recupere sola o lo haga muy lento. Así cada tormenta de radiación deja una consecuencia duradera.
+## 5. Algoritmo para sacar eventos
 
-## 8. Limitaciones
+### Estado
 
-- **DONKI mide la Tierra, no la Luna.** Suponemos que la Luna recibe lo mismo, porque está a ~384,000 km, muy cerca en escala solar.
-- **Los datos se revisan con el tiempo.** Los científicos de DONKI corrigen y añaden eventos días después de que ocurren, así que los conteos pueden variar un poco si se vuelven a descargar.
-- **Los efectos son de diseño, no científicos.** Las severidades salen de datos reales, pero los valores de la sección 5 son una propuesta de juego.
-- **2025-2026 es un periodo muy activo** porque está cerca del máximo solar. DONKI tiene datos desde 2010, por si queremos años más tranquilos (2018-2020, mínimo solar).
+- `pool`: los eventos que todavía no salieron. Al inicio, todos.
+- `queue`: una cola con los eventos pendientes de la cadena actual. Al inicio, vacía.
+
+### `nextEvent(tipoDeseado)`
+
+1. **Si la cola tiene eventos**, saca el primero y devuélvelo. Las cadenas siempre se terminan antes de sortear otro evento.
+2. **Elige el tipo.**
+   - Si el juego necesita un tipo concreto (por ejemplo, `SEP` para un nivel de radiación), usa `tipoDeseado`.
+   - Si no, **sortea el tipo primero** con los pesos de la tabla de abajo.
+3. **Filtra** el `pool` para quedarte con los eventos de ese tipo.
+4. **Si no quedan eventos de ese tipo**, vuelve a meter en el `pool` todos los de ese tipo (se repiten) y filtra otra vez.
+5. **Elige uno al azar** entre los candidatos.
+6. **Si el evento tiene `chain`:**
+   - Mete en la cola todos los eventos de `chains[chain.id]` que sigan en el `pool`, en orden de `step`.
+   - Quítalos todos del `pool`.
+   - Saca el primero de la cola y devuélvelo.
+
+   La cadena siempre empieza en el paso 1. Si pediste una `CME` y su cadena empieza con una `FLR`, primero sale la llamarada y luego la CME.
+7. **Si no tiene cadena**, quítalo del `pool` y devuélvelo.
+
+### Por qué sortear el tipo primero
+
+Las llamaradas son el 58 % de los eventos. Si eliges al azar entre todos los eventos, el jugador vería casi solo llamaradas y casi nunca una tormenta de radiación. Al sortear primero el tipo, controlas cuánto aparece cada uno.
+
+Pesos sugeridos para empezar (se ajustan jugando):
+
+| Tipo | Peso | Motivo |
+|---|---|---|
+| FLR | 30 | Común y casi siempre es el inicio de una cadena |
+| CME | 30 | Es la fuente principal de apagones |
+| HSS | 15 | Evento leve, sirve para el minijuego de limpiar paneles |
+| IPS | 10 | Leve |
+| SEP | 15 | Solo hay 6, así que se repetirán. Es el evento más peligroso; no conviene que sea muy frecuente |
+
+### Pseudocódigo
+
+```
+pool  = copy(json.events)
+queue = []
+
+function nextEvent(tipoDeseado = null):
+    if queue is not empty:
+        return queue.popFront()
+
+    tipo = tipoDeseado ?? weightedRandom(PESOS)
+    candidatos = pool.filter(e => e.type == tipo)
+    if candidatos is empty:
+        pool.addAll(json.events.filter(e => e.type == tipo))   // se repiten
+        candidatos = pool.filter(e => e.type == tipo)
+
+    e = randomChoice(candidatos)
+
+    if e.chain == null:
+        pool.remove(e)
+        return e
+
+    for id in json.chains[e.chain.id]:          // ya vienen en orden de step
+        ev = pool.findById(id)
+        if ev != null:
+            queue.pushBack(ev)
+            pool.remove(ev)
+    return queue.popFront()
+```
+
+## 6. Cómo conectar los campos con las decisiones del jugador
+
+El jugador decide entre priorizar **energía** o **salud**. Cada campo del evento indica qué acciones tienen sentido:
+
+| Si el evento trae... | Acción de **energía** | Acción de **salud** |
+|---|---|---|
+| `blackout: true` | Activar las baterías de repuesto **antes** de que pasen los `arrival_minutes` | – |
+| `radiation_points > 0` | – | Evitar las zonas sin protección; minijuego de mover objetos para hacer un escudo; arreglar el panel electrolítico |
+| `type` `SEP` o `HSS` (paneles degradados o cubiertos de polvo) | Limpiar y reemplazar el panel solar (minijuego) | – |
+
+`arrival_minutes` es el reloj de cuenta regresiva. Los rangos reales van de 8 minutos a 5 días, así que conviene comprimirlos. Por ejemplo, 1 minuto real puede equivaler a 1 segundo de juego, con un tope de unos 2 minutos de juego para las CME. Lo importante es conservar el orden: una llamarada llega casi de inmediato y una CME da tiempo para prepararse.
+
+## 7. Limitaciones
+
+- **DONKI mide cerca de la Tierra, no en la Luna.** Suponemos que la Luna recibe lo mismo, porque a escala solar está muy cerca (~384,000 km).
+- **Los puntos de radiación y las reglas de apagón son de diseño.** Salen de datos reales (clase de la llamarada, energía de los protones, velocidad de la CME), pero no son una dosis física.
+- **Los datos se revisan con el tiempo.** DONKI corrige y añade eventos días después, así que los conteos pueden variar un poco si se vuelven a descargar.
+- **2025-2026 es un periodo muy activo**, cerca del máximo solar. DONKI tiene datos desde 2010 por si se quiere un año más tranquilo.
